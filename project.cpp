@@ -11,8 +11,8 @@ using namespace std;
 #define WANT_TO_USE 1
 #define USING 2
 
-#define GRP_SIZE 5
-#define STUDENT_SIZE 15
+#define GRP_SIZE 1
+#define STUDENT_SIZE 3
 
 int printing_states[17];
 
@@ -138,6 +138,7 @@ void * do_stuff(void * arg)
         }
 
         LeavePrinter(t_info);
+        return NULL;
     //}
 }
 
@@ -164,7 +165,7 @@ int main(void)
     // t2.id = 2;
     // t2.p = 1;
 
-    pthread_t threads[18];
+    pthread_t threads[3];
 
     // pthread_t thread1;
     // pthread_t thread2;
@@ -178,12 +179,12 @@ int main(void)
 
         //pthread_mutex_lock(&info_lock);
         
-        Info std_info;
+        Info *std_info = new Info();
 
-        std_info.id = i+1;
-        std_info.p = (i+1)%4 +1;
+        std_info->id = i+1;
+        std_info->p = (i+1)%4 +1;
 
-        std_info.first = i/5 +1;
+        std_info->first = i/5 +1;
 
         //pthread_mutex_unlock(&info_lock);
 
@@ -191,8 +192,7 @@ int main(void)
         // printf("Creating %d\n" , std_info.id);
         // fflush(stdout);
         // pthread_mutex_unlock(&test_lock);
-
-        pthread_create(&(threads[i]), NULL, do_stuff, (void*)&std_info);
+        pthread_create(threads+i, NULL, do_stuff, (void *) std_info);
 
         //pthread_join((threads[i]), NULL);  
 
