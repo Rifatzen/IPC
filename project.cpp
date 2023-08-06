@@ -11,24 +11,36 @@ using namespace std;
 #define WANT_TO_USE 1
 #define USING 2
 
-#define GRP_SIZE 1
-#define STUDENT_SIZE 3
+#define GRP_SIZE 10
+#define STUDENT_SIZE 40
 
-int printing_states[17];
+int printing_states[STUDENT_SIZE+10];
 
 int printers[4];
 
-sem_t binding_usable; // how many binders are free
-sem_t binding_full; // how many are occupied
+int total_reports = 0;
+int readers = 0;
 
-queue<int> binding;
+// sem_t binding_usable; // how many binders are free
+// sem_t binding_full; // how many are occupied
 
-sem_t students[17];
+// queue<int> binding;
+
+sem_t students[STUDENT_SIZE+10];
+sem_t leader_binder_access[GRP_SIZE + 10];
+sem_t binders;
+sem_t report;
 
 pthread_mutex_t printer_mutex;
+pthread_mutex_t binder_mutex;
+pthread_mutex_t report_entry_mutex;
+
+
 
 pthread_mutex_t test_lock;
 pthread_mutex_t info_lock;
+
+pthread_t threads[STUDENT_SIZE+10];
 
 
 class Info
@@ -41,12 +53,26 @@ public:
 
 void init_semaphore()
 {
-    for(int i=0;i<17;i++){
-        sem_init(&students[i] ,0,0);
+    for(int i=0;i<STUDENT_SIZE;i++){
+        sem_init(&students[i] ,0,1);
         printing_states[i] = NOT_USING;
         printers[i] = 0;
     }
+
+    for(int i=0;i<GRP_SIZE;i++){
+        sem_init(&leader_binder_access[i],0,-100);
+    }
+
+    sem_init(&binders,0,2);
+    sem_init(&report,0,1);
+    //sem_init(&total_reports, 0 ,0);
+
     pthread_mutex_init(&printer_mutex, NULL);
+    pthread_mutex_init(&binder_mutex, NULL);
+    pthread_mutex_init(&report_entry_mutex, NULL);
+
+
+
     pthread_mutex_init(&test_lock, NULL);
     pthread_mutex_init(&info_lock, NULL);
 }
@@ -58,6 +84,7 @@ void test_printer(int id)
         printing_states[id] = USING;
         printers[id%4 +1 ] = 1;
         sem_post(&students[id]);
+        //sleep(1);
     }
 }
 
@@ -71,6 +98,7 @@ void UsePrinter(Info arg)
 
     printing_states[t_info.id] = WANT_TO_USE;
 
+    
     test_printer(t_info.id);
 
     pthread_mutex_unlock(&printer_mutex);
@@ -87,6 +115,9 @@ void LeavePrinter(Info arg)
 
     printing_states[t_info.id] = NOT_USING;
     printers[t_info.id %4 +1] = 0;
+    //sleep(1);
+
+    //sem_post(&leader_binder_access[(t_info.first-1)/GRP_SIZE]);
 
     for(int i=0;i<GRP_SIZE ; i++){
         //printf("1trying to notify %d\n", t_info.first +i );
@@ -110,36 +141,128 @@ void LeavePrinter(Info arg)
 void * do_stuff(void * arg)
 {
 
-    //pthread_mutex_lock(&info_lock);
+   
     Info t_info = *((Info*) arg);
 
-
-    pthread_mutex_lock(&test_lock);
-    printf("arg with %d \n", t_info.id);
-    fflush(stdout);
-    pthread_mutex_unlock(&test_lock);
-
-
-    //pthread_mutex_unlock(&info_lock);
 
     //while(true){
 
         UsePrinter(t_info);
 
         pthread_mutex_lock(&test_lock);
-        printf("%d is using printer %d \n" , t_info.id, t_info.p);
+
+
+        printf("%d is using printer %d, %d \n" , t_info.id, t_info.p, t_info.first);
         fflush(stdout);
         pthread_mutex_unlock(&test_lock);
 
 
-
-        if(t_info.id %4 == 0){
-            sleep(3);
-        }
+        //sleep(1);
 
         LeavePrinter(t_info);
-        return NULL;
+
+
+        if(t_info.id % GRP_SIZE == 0){
+
+
+            for(int i=t_info.first-1 ; i<t_info.first+GRP_SIZE-1 ; i++){
+                //printf("joining %d for %d\n" , i, t_info.id);
+
+                if((i+1)%GRP_SIZE != 0){
+                    pthread_join(threads[i], NULL);
+                }
+            }
+
+            //sem_wait(&leader_binder_access[(t_info.first-1)/GRP_SIZE]);
+
+            sem_wait(&binders);
+            pthread_mutex_lock(&binder_mutex);
+
+            pthread_mutex_lock(&test_lock);
+            printf("Group %d is using binder \n" , (t_info.first-1)/GRP_SIZE +1);
+            fflush(stdout);
+            pthread_mutex_unlock(&test_lock);
+
+            pthread_mutex_unlock(&binder_mutex);
+            sem_post(&binders);
+
+
+            sem_wait(&report);
+
+
+            pthread_mutex_lock(&test_lock);
+            printf("Group %d is reporting\n" , (t_info.first-1)/GRP_SIZE +1);
+            fflush(stdout);
+            pthread_mutex_unlock(&test_lock);
+
+            
+
+            total_reports = total_reports +1 ;
+
+
+            //printf("total reports %d\n ", total_reports );
+
+            sem_post(&report);
+
+
+            
+
+        }
+
+
+
+
     //}
+}
+
+void * read_reports( void* arg)
+{
+
+    
+
+    int sid = *((int* )arg);
+
+
+    while(true){
+
+
+        pthread_mutex_lock(&report_entry_mutex);
+
+        readers = readers +1;
+
+        if(readers == 1){
+            sem_wait(&report);
+        }
+
+        pthread_mutex_unlock(&report_entry_mutex);
+
+
+        sleep(1);
+
+        //int get_total = sem_getvalue(&total_reports, &get_total);
+        
+
+        pthread_mutex_lock(&test_lock);
+        printf("staff %d is reading. Submissions: %d\n" ,sid, total_reports);
+        fflush(stdout);
+        pthread_mutex_unlock(&test_lock);
+
+        pthread_mutex_lock(&report_entry_mutex);
+
+        readers = readers-1;
+
+        if(readers == 0){
+            sem_post(&report);
+        }
+
+        
+        pthread_mutex_unlock(&report_entry_mutex);
+
+        sleep(2);
+    
+    
+    }
+
 }
 
 
@@ -147,66 +270,61 @@ void * do_stuff(void * arg)
 
 int main(void)
 {
-    // pthread_t thread1;
-    // pthread_t thread2;
 
-    // init_semaphore();
+    pthread_t reader_teacher;
+    pthread_t reader_display;
 
-    // int p = 1;
-    // int id1 = 1;
-    // int id2 = 2;
-
-    // Info t1;
-    // t1.id = 1;
-    // t1.p = 1;
-
-
-    // Info t2;
-    // t2.id = 2;
-    // t2.p = 1;
-
-    pthread_t threads[3];
-
-    // pthread_t thread1;
-    // pthread_t thread2;
-    // pthread_t thread3;
     
 
     init_semaphore();
 
     for(int i=0;i<STUDENT_SIZE;i++){
 
-
-        //pthread_mutex_lock(&info_lock);
         
-        Info *std_info = new Info();
+        Info* std_info = new Info();
 
         std_info->id = i+1;
         std_info->p = (i+1)%4 +1;
 
-        std_info->first = i/5 +1;
+        std_info->first = (i/GRP_SIZE)*GRP_SIZE +1;
 
-        //pthread_mutex_unlock(&info_lock);
 
-        
-        // printf("Creating %d\n" , std_info.id);
-        // fflush(stdout);
-        // pthread_mutex_unlock(&test_lock);
-        pthread_create(threads+i, NULL, do_stuff, (void *) std_info);
+        pthread_create(threads+i, NULL, do_stuff, (void*)std_info);
 
         //pthread_join((threads[i]), NULL);  
 
     }
 
-    // for(int i=0;i<STUDENT_SIZE;i++){
-    //     pthread_join(threads[i], NULL);
-    // }
-
-    //pthread_create(&thread1 , NULL,UsePrinter, (void *) &t1 );
-    //pthread_create(&thread2 , NULL,UsePrinter, (void *) &t2 );
 
 
-    while(1);
+
+
+    int* id1 = new int;
+    int* id2 = new int;
+
+    *id1 = 1;
+    *id2 = 2;
+
+
+
+    pthread_create(&reader_teacher, NULL, read_reports , (void*) id1 );
+    pthread_create(&reader_display, NULL, read_reports , (void*) id2 );
+
+
+
+
+    for(int i=0;i<STUDENT_SIZE;i++){
+        if((i+1)%GRP_SIZE == 0){
+            pthread_join((threads[i]), NULL);
+        }
+    }
+
+    pthread_join(reader_teacher , NULL);
+    pthread_join(reader_display, NULL);
+
+
+
+    //while(1);
     return 0;
     
 }
